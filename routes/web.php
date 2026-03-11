@@ -54,6 +54,11 @@ Route::middleware('auth.user')->group(function () {
     Route::get('/checklist', [ChecklistController::class, 'index'])->name('checklist.index');
     Route::post('/checklist/update', [ChecklistController::class, 'update'])->name('checklist.update');
     Route::post('/checklist/mark-seen', [ChecklistController::class, 'markSeen'])->name('checklist.mark-seen');
+    Route::post('/checklist/attachment', [ChecklistController::class, 'uploadAttachment'])->name('checklist.attachment');
+    Route::post('/checklist/doc/attachment', [ChecklistController::class, 'uploadDocAttachment'])->name('checklist.doc.attachment');
+    Route::post('/checklist/complete', [ChecklistController::class, 'completeDivision'])->name('checklist.complete');
+    Route::post('/checklist/hc/surat-keterangan', [ChecklistController::class, 'uploadHcSuratKeterangan'])->name('checklist.hc.surat-keterangan');
+    Route::post('/checklist/hc/done', [ChecklistController::class, 'hcDone'])->name('checklist.hc.done');
     Route::get('/checklist/master', [ChecklistMasterController::class, 'index'])->name('checklist.master.index');
     Route::post('/checklist/master', [ChecklistMasterController::class, 'store'])->name('checklist.master.store');
     Route::post('/checklist/master/{id}/update', [ChecklistMasterController::class, 'update'])->name('checklist.master.update');

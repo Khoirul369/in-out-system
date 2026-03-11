@@ -47,7 +47,7 @@
         const pic = btn.dataset.defaultPic || '';
         const isActive = btn.dataset.isActive === '0' ? '0' : '1';
         const action = btn.dataset.updateAction || '';
-        const usedAndChecked = btn.dataset.usedAndChecked === '1';
+        const lockFields = btn.dataset.lockFields === '1';
         if (!id || !action) return;
 
         form.setAttribute('action', action);
@@ -56,7 +56,7 @@
         editItemId.value = id;
         itemLabel.value = label;
         defaultPic.value = pic;
-        setFieldsLocked(usedAndChecked);
+        setFieldsLocked(lockFields);
         const activeRadio = form.querySelector(`input[name="is_active"][value="${isActive}"]`);
         if (activeRadio) activeRadio.checked = true;
         cancelEditBtn.classList.remove('master-hide');

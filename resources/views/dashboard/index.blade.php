@@ -17,6 +17,19 @@
   .progress-pending-note { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .badge-gap { margin-left: 8px; }
   .pm-pending-alert { margin-bottom: 16px; }
+  .dash-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+  .dash-grid .card { margin-bottom: 0; }
+  .notif-card { position: sticky; top: 90px; }
+  .notif-item { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .notif-item:last-child { border-bottom: none; }
+  .notif-title { font-weight: 700; font-size: 14px; }
+  .notif-msg { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .notif-msg .notif-name { font-weight: 700; color: #0f172a; background: #e0f2fe; padding: 1px 4px; border-radius: 4px; }
+  .notif-time { color: #94a3b8; font-size: 12px; margin-top: 4px; }
+  .notif-empty { color: var(--muted); font-size: 14px; padding: 16px 0; text-align: center; }
+  .notif-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .notif-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #eff6ff; color: #1e40af; }
+  @media (max-width: 980px) { .dash-grid { grid-template-columns: 1fr; } .notif-card { position: static; } }
 </style>
 @endsection
 
@@ -95,6 +108,7 @@
 @endif
 
 {{-- Pengajuan Resign Saya --}}
+<div class="dash-grid">
 <div class="card">
   <div class="card-title">Pengajuan Resign Saya</div>
 
@@ -138,6 +152,45 @@
       </table>
     </div>
   @endif
+</div>
+
+<div class="card notif-card">
+  <div class="notif-head">
+    <div class="card-title" style="margin:0;">Notifikasi</div>
+    @if(($unreadCount ?? 0) > 0)
+      <span class="notif-badge">{{ $unreadCount }} baru</span>
+    @endif
+  </div>
+
+  @if(($notifications ?? collect())->isEmpty())
+    <div class="notif-empty">Tidak ada notifikasi.</div>
+  @else
+    @foreach($notifications as $n)
+      <div class="notif-item">
+        <div class="notif-title">{{ $n->title }}</div>
+        <div class="notif-msg">
+          @if(!empty($n->data['employee_name']))
+            @php
+              $escapedMsg = e($n->message);
+              $escapedName = e($n->data['employee_name']);
+              $highlighted = '<span class="notif-name">' . $escapedName . '</span>';
+              $msg = str_replace($escapedName, $highlighted, $escapedMsg);
+            @endphp
+            {!! $msg !!}
+          @else
+            {{ $n->message }}
+          @endif
+        </div>
+        <div class="notif-time">{{ $n->created_at ? $n->created_at->diffForHumans() : '' }}</div>
+        @if(!empty($n->data['resign_id']))
+          <div class="mt-8">
+            <a href="{{ route('resign.detail', $n->data['resign_id']) }}" class="btn btn-outline btn-sm">Lihat Pengajuan</a>
+          </div>
+        @endif
+      </div>
+    @endforeach
+  @endif
+</div>
 </div>
 
 {{-- Verifikasi HC --}}

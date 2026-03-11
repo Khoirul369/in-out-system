@@ -123,15 +123,21 @@
             @foreach($items as $index => $item)
               @php
                 $isOwnedByUser = (int) $item->admin_user_id === (int) $user->id;
+                $isShared = $item->admin_user_id === null;
                 $isUsedAndChecked = in_array($item->id, $masterIdsLocked ?? [], true);
-                $editDisabled = !$isOwnedByUser;
+                // Semua item departemen bisa dibuka mode edit untuk ubah status
+                $editDisabled = false;
                 $deleteDisabled = !$isOwnedByUser || $isUsedAndChecked;
+                // Jika bukan owner/shared atau item sudah dipakai, kunci field Nama & PIC (hanya status)
+                $lockFields = $isUsedAndChecked || $isShared || !$isOwnedByUser;
               @endphp
               <tr>
                 <td>{{ $index + 1 }}</td>
                 <td>
                   {{ $item->item_label }}
-                  @if(!$isOwnedByUser)
+                  @if($isShared)
+                    <span class="master-lock" title="Item global (status bisa diubah)">🔒</span>
+                  @elseif(!$isOwnedByUser)
                     <span class="master-lock" title="Readonly">🔒</span>
                   @endif
                   @if($isUsedAndChecked)
@@ -154,13 +160,13 @@
                   <div class="master-actions">
                     <button type="button"
                       class="master-icon-btn btn-master-edit"
-                      title="{{ $isUsedAndChecked ? 'Item sudah dipakai: hanya status Active/Inactive yang bisa diubah' : 'Edit' }}"
+                      title="{{ $lockFields ? 'Hanya status Active/Inactive yang bisa diubah' : 'Edit' }}"
                       data-id="{{ $item->id }}"
                       data-item-label="{{ $item->item_label }}"
                       data-default-pic="{{ $item->default_pic }}"
                       data-is-active="{{ $item->is_active ? '1' : '0' }}"
                       data-update-action="{{ route('checklist.master.update', $item->id) }}"
-                      data-used-and-checked="{{ $isUsedAndChecked ? '1' : '0' }}"
+                      data-lock-fields="{{ $lockFields ? '1' : '0' }}"
                       {{ $editDisabled ? 'disabled' : '' }}>
                       ✎
                     </button>

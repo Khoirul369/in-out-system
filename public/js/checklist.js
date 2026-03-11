@@ -41,9 +41,11 @@
     const form = document.getElementById(`form-${resignId}`);
     if (!form) return;
     const checkboxes = form.querySelectorAll('input[type="checkbox"][name*="[done]"]');
-    const total = checkboxes.length;
+    const hiddenDones = form.querySelectorAll('input[type="hidden"][name*="[done]"][value="1"]');
+    const total = checkboxes.length + hiddenDones.length;
     let done = 0;
     checkboxes.forEach((cb) => { if (cb.checked) done++; });
+    done += hiddenDones.length;
     const percent = total > 0 ? Math.round((done / total) * 100) : 0;
     const fill = document.getElementById(`progress-fill-${resignId}`);
     const text = document.getElementById(`progress-text-${resignId}`);
@@ -54,17 +56,30 @@
   const canEnableSaveButton = (resignId) => {
     const form = document.getElementById(`form-${resignId}`);
     if (!form) return false;
+    // Sedang mode edit (ada wrap keterangan tampil) → boleh simpan
+    const visibleWrap = form.querySelector('.checklist-keterangan-wrap[data-ket-wrap="1"]');
+    if (visibleWrap && visibleWrap.style.display !== 'none') return true;
+    let hasDone = false;
     const checkboxes = form.querySelectorAll('input[type="checkbox"][name*="[done]"]:not([disabled])');
-    let hasChecked = false;
     for (const cb of checkboxes) {
       if (!cb.checked) continue;
-      hasChecked = true;
+      hasDone = true;
       const row = cb.closest('.checklist-row');
       const ketInput = row ? row.querySelector('textarea[name*="[keterangan]"], input[name*="[keterangan]"]') : null;
       const val = ketInput ? ketInput.value.trim() : '';
       if (!val) return false;
     }
-    return hasChecked;
+    const hiddenDones = form.querySelectorAll('input[type="hidden"][name*="[done]"][value="1"]');
+    for (const h of hiddenDones) {
+      const itemKey = (h.name.match(/items\[([^\]]+)\]\[done\]/) || [])[1];
+      if (!itemKey) continue;
+      hasDone = true;
+      const itemBlock = form.querySelector(`.checklist-item[data-item-key="${itemKey}"]`);
+      const ketInput = itemBlock ? itemBlock.querySelector('textarea[name*="[keterangan]"], input[name*="[keterangan]"]') : null;
+      const val = ketInput ? ketInput.value.trim() : '';
+      if (!val) return false;
+    }
+    return hasDone;
   };
 
   const updateSaveButtonState = (resignId) => {
@@ -74,7 +89,24 @@
       if (wrap.style.display === 'none') return;
       const ta = wrap.querySelector('textarea[name*="[keterangan]"]');
       const btn = wrap.querySelector('.checklist-item-save-btn');
-      if (btn && ta) btn.disabled = !ta.value.trim();
+      if (!btn || !ta) return;
+
+      // Cari itemKey untuk mengetahui status checkbox (done / tidak)
+      const itemBlock = wrap.closest('.checklist-item');
+      const itemKey = itemBlock ? itemBlock.dataset.itemKey : null;
+      let isChecked = false;
+      if (itemKey) {
+        const cb = form.querySelector(`input[type="checkbox"][name="items[${itemKey}][done]"]`);
+        if (cb) isChecked = cb.checked;
+      }
+
+      // Jika sedang dicentang (checked) → tetap wajib isi keterangan.
+      // Jika sedang di-uncheck (checkbox off / tidak ada checkbox) → boleh simpan walau keterangan kosong.
+      if (isChecked) {
+        btn.disabled = !ta.value.trim();
+      } else {
+        btn.disabled = false;
+      }
     });
   };
 
@@ -180,18 +212,43 @@
 
       form.querySelectorAll('.checklist-edit-item-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
+          if (btn.disabled) return;
           const itemKey = btn.dataset.itemKey;
           const itemBlock = form.querySelector(`.checklist-item[data-item-key="${itemKey}"]`);
           if (!itemBlock) return;
+          const row = itemBlock.querySelector('.checklist-row');
           const savedBlock = itemBlock.querySelector('[data-done-block="1"]');
           const hiddenInput = itemBlock.querySelector('input[name*="[keterangan]"]');
-          if (!savedBlock || !hiddenInput) return;
+          if (!row || !savedBlock || !hiddenInput) return;
           const currentVal = hiddenInput.value || '';
+          // Ganti ikon centang + hidden(done=1) dengan checkbox (bisa uncheck) + hidden(done=0)
+          const icon = row.querySelector('.checklist-done-icon');
+          const hiddenDone = row.querySelector('input[name*="[done]"]');
+          if (icon) icon.remove();
+          if (hiddenDone) hiddenDone.remove();
+          const hiddenZero = document.createElement('input');
+          hiddenZero.type = 'hidden';
+          hiddenZero.name = `items[${itemKey}][done]`;
+          hiddenZero.value = '0';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.name = `items[${itemKey}][done]`;
+          cb.value = '1';
+          cb.checked = true;
+          cb.dataset.resignId = resignId;
+          cb.dataset.itemKey = itemKey;
+          row.insertBefore(hiddenZero, row.firstChild);
+          row.insertBefore(cb, row.firstChild);
+          cb.addEventListener('change', () => {
+            updateSaveButtonState(resignId);
+            updateProgressUI(resignId);
+          });
           savedBlock.style.display = 'none';
           hiddenInput.remove();
           const wrap = document.createElement('div');
           wrap.className = 'checklist-keterangan-wrap';
           wrap.setAttribute('data-ket-wrap', '1');
+          wrap.style.display = 'block';
           wrap.innerHTML = `<label>Keterangan</label><textarea name="items[${itemKey}][keterangan]" placeholder="Tambahkan keterangan..." data-resign-id="${resignId}" data-item-key="${itemKey}" rows="2"></textarea><div class="checklist-item-actions mt-2"><button type="submit" class="btn btn-primary btn-sm checklist-item-save-btn">Simpan</button></div>`;
           savedBlock.parentNode.insertBefore(wrap, savedBlock);
           const textarea = wrap.querySelector('textarea');
@@ -200,6 +257,7 @@
           textarea.addEventListener('change', () => updateSaveButtonState(resignId));
           textarea.focus();
           updateSaveButtonState(resignId);
+          updateProgressUI(resignId);
         });
       });
 

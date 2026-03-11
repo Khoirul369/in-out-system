@@ -31,4 +31,9 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'muc_leave' => [
+        'url' => env('MUC_LEAVE_API_URL', 'https://api.mucsystem.net/api/leave/balance-remaining'),
+        'token' => env('MUC_LEAVE_API_TOKEN'),
+    ],
+
 ];

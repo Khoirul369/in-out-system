@@ -96,8 +96,8 @@ class ResignEmploymentStatusValidationTest extends TestCase
             });
         }
 
-        if (!Schema::connection('net_hrd')->hasTable('employee_status')) {
-            Schema::connection('net_hrd')->create('employee_status', function ($table) {
+        if (!Schema::connection('net_hrd')->hasTable('employees_status')) {
+            Schema::connection('net_hrd')->create('employees_status', function ($table) {
                 $table->bigIncrements('id');
                 $table->unsignedBigInteger('employees_id');
                 $table->unsignedBigInteger('status_id');
@@ -107,8 +107,8 @@ class ResignEmploymentStatusValidationTest extends TestCase
 
         if (!Schema::connection('net_hrd')->hasColumn('status', 'id')
             || !Schema::connection('net_hrd')->hasColumn('status', 'status')
-            || !Schema::connection('net_hrd')->hasColumn('employee_status', 'employees_id')
-            || !Schema::connection('net_hrd')->hasColumn('employee_status', 'status_id')) {
+            || !Schema::connection('net_hrd')->hasColumn('employees_status', 'employees_id')
+            || !Schema::connection('net_hrd')->hasColumn('employees_status', 'status_id')) {
             $this->markTestSkipped('Struktur tabel net_hrd tidak sesuai untuk test ini.');
         }
     }
@@ -127,12 +127,12 @@ class ResignEmploymentStatusValidationTest extends TestCase
         }
 
         DB::connection('net_hrd')
-            ->table('employee_status')
+            ->table('employees_status')
             ->where('employees_id', $userId)
             ->delete();
 
         DB::connection('net_hrd')
-            ->table('employee_status')
+            ->table('employees_status')
             ->insert([
                 'employees_id' => $userId,
                 'status_id' => $statusId,

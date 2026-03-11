@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Models\ChecklistMaster;
 use App\Models\User;
+use App\Models\ResignChecklistItem;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -20,10 +22,11 @@ class ChecklistMasterController extends Controller
         }
 
         $department = $user->getDepartment();
+        // Pastikan template default juga ada di master agar bisa di-manage (Active/Inactive)
+        // Aman dipanggil berulang: hanya membuat item yang belum ada.
+        $this->ensureDefaultTemplateMastersExist($department, $user->id);
+        // Tampilkan semua master item dalam departemen agar item "Admin <Dept>" bisa di-manage statusnya.
         $items = ChecklistMaster::where('department', $department)
-            ->where(function ($q) use ($user) {
-                $q->where('admin_user_id', $user->id)->orWhereNull('admin_user_id');
-            })
             ->orderBy('item_label')
             ->get();
 
@@ -86,13 +89,16 @@ class ChecklistMasterController extends Controller
         }
 
         $master = ChecklistMaster::findOrFail($id);
-        if ((int) $master->admin_user_id !== (int) $user->id) {
-            abort(403, 'Anda hanya bisa mengubah item milik admin Anda.');
+        if ((string) $master->department !== (string) $user->getDepartment()) {
+            abort(403, 'Anda hanya bisa mengubah item untuk departemen Anda.');
         }
-
+        $isOwnedByUser = (int) $master->admin_user_id === (int) $user->id;
+        $isShared = $master->admin_user_id === null;
         $usedAndChecked = $this->isMasterUsedAndChecked($master);
 
-        if ($usedAndChecked) {
+        // Item shared (admin_user_id NULL) atau item yang sudah dipakai & dicentang: hanya izinkan ubah status Active/Inactive
+        // Item milik user lain juga hanya boleh ubah status (agar item "Admin <Dept>" bisa dinonaktifkan).
+        if ($isShared || $usedAndChecked || !$isOwnedByUser) {
             // Item sudah dipakai dan dicentang: hanya izinkan ubah status Active/Inactive
             $validated = $request->validate([
                 'is_active' => 'nullable|boolean',
@@ -142,6 +148,7 @@ class ChecklistMasterController extends Controller
         }
 
         $master = ChecklistMaster::findOrFail($id);
+        // Hanya owner yang boleh delete (item shared tidak bisa dihapus dari sini)
         if ((int) $master->admin_user_id !== (int) $user->id) {
             abort(403, 'Anda hanya bisa menghapus item milik admin Anda.');
         }
@@ -224,5 +231,52 @@ class ChecklistMasterController extends Controller
             ->where('item_key', $master->item_key)
             ->where('done', 1)
             ->exists();
+    }
+
+    private function ensureDefaultTemplateMastersExist(?string $department, int $updatedByUserId): void
+    {
+        if (!$department) {
+            return;
+        }
+
+        $templates = ResignChecklistItem::CHECKLIST_TEMPLATES[$department] ?? null;
+        if (!$templates || !is_array($templates) || empty($templates)) {
+            return;
+        }
+
+        $existingKeys = ChecklistMaster::where('department', $department)
+            ->pluck('item_key')
+            ->all();
+        $existingKeyMap = array_fill_keys($existingKeys, true);
+
+        $deptLabel = ResignChecklistItem::DEPARTMENT_LABELS[$department] ?? strtoupper($department);
+        $adminPicLabel = 'Admin ' . $deptLabel;
+
+        $created = 0;
+        foreach ($templates as $key => $label) {
+            $key = (string) $key;
+            if ($key === '' || isset($existingKeyMap[$key])) {
+                continue;
+            }
+
+            ChecklistMaster::create([
+                'department' => $department,
+                'admin_user_id' => null, // global/shared
+                'item_key' => $key,
+                'item_label' => (string) $label,
+                'default_pic' => $adminPicLabel,
+                'updated_by' => $updatedByUserId,
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $created++;
+        }
+
+        Log::info('Checklist master template sync', [
+            'department' => $department,
+            'created' => $created,
+            'updated_by' => $updatedByUserId,
+        ]);
     }
 }

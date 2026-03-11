@@ -182,6 +182,7 @@
           $navChecklistPendingCount = 0;
           $navPmPendingCount = 0;
           $navHcPendingCount = 0;
+          $navUnreadNotifCount = 0;
           if ($isAdmin) {
             $dept = $navUser->getDepartment();
             $checklistSeenUntil = session('checklist_seen_until');
@@ -192,6 +193,7 @@
               })
               ->count();
           }
+          $navUnreadNotifCount = \App\Models\Notification::where('user_id', $navUser->id)->where('is_read', 0)->count();
           if ($isPm) {
             $subordinateIds = \App\Models\User::where('pm_id', $navUser->id)->pluck('id');
             $pmSeenUntil = session('pm_seen_until');

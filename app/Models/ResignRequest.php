@@ -15,6 +15,12 @@ class ResignRequest extends Model
         'employees_id', 'resign_file_method', 'reason', 'last_date',
         'description', 'resign_file_path', 'resign_filename',
         'status', 'workflow_stage',
+        'completed_hc_at', 'completed_hc_by',
+        'completed_it_at', 'completed_it_by',
+        'completed_doc_at', 'completed_doc_by',
+        'completed_finance_at', 'completed_finance_by',
+        'completed_ga_at', 'completed_ga_by',
+        'done_at', 'done_by',
         'approved_description', 'approved_at', 'approved_by',
         'approved_hc_description', 'approved_hc_at', 'approved_hc_by',
         'rejected_at', 'rejected_by', 'rejected_stage',
@@ -28,6 +34,12 @@ class ResignRequest extends Model
         'approved_at' => 'datetime',
         'approved_hc_at' => 'datetime',
         'rejected_at' => 'datetime',
+        'completed_hc_at' => 'datetime',
+        'completed_it_at' => 'datetime',
+        'completed_doc_at' => 'datetime',
+        'completed_finance_at' => 'datetime',
+        'completed_ga_at' => 'datetime',
+        'done_at' => 'datetime',
     ];
 
     // Status constants
@@ -150,6 +162,20 @@ class ResignRequest extends Model
 
     public function getWorkflowLabel(): string
     {
+        // Jika semua divisi sudah complete namun belum difinalisasi HC (Done),
+        // tampilkan label yang lebih jelas daripada "Proses Divisi".
+        if ($this->workflow_stage === self::STAGE_TO_HC && $this->status !== self::STATUS_DONE) {
+            $allCompleted =
+                !empty($this->completed_hc_at)
+                && !empty($this->completed_it_at)
+                && !empty($this->completed_doc_at)
+                && !empty($this->completed_finance_at)
+                && !empty($this->completed_ga_at);
+            if (($allCompleted || $this->allChecklistItemsDone()) && empty($this->done_at)) {
+                return 'Menunggu Finalisasi HC';
+            }
+        }
+
         $map = [
             self::STAGE_TO_PM => 'Menunggu Approval PM',
             self::STAGE_PM_REJECTED => 'Ditolak PM',
@@ -159,6 +185,15 @@ class ResignRequest extends Model
             self::STAGE_COMPLETED => 'Selesai',
         ];
         return $map[$this->workflow_stage] ?? $this->workflow_stage;
+    }
+
+    private function allChecklistItemsDone(): bool
+    {
+        // Fallback: jika tombol Complete belum dipakai tapi semua item checklist sudah dicentang.
+        // Dipakai untuk label saja (tidak mengubah status/data).
+        return ResignChecklistItem::where('resign_request_id', $this->id)
+            ->where('done', 0)
+            ->doesntExist();
     }
 
     public function isTerminalStage(): bool

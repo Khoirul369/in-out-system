@@ -7,6 +7,8 @@ use App\Models\User;
 use App\Models\ResignRequest;
 use App\Models\Notification;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
@@ -33,8 +35,9 @@ class ResignController extends Controller
         $hasPm = !empty($user->pm_id);
         $employmentType = $this->resolveEmploymentType($user);
         $requiresResignFile = $this->requiresResignLetterUpload($employmentType);
+        $leaveBalance = $this->fetchLeaveBalance($user);
 
-        return view('resign.create', compact('user', 'existingRequest', 'hasPm', 'employmentType', 'requiresResignFile'));
+        return view('resign.create', compact('user', 'existingRequest', 'hasPm', 'employmentType', 'requiresResignFile', 'leaveBalance'));
     }
 
     public function submit(Request $request)
@@ -245,10 +248,14 @@ class ResignController extends Controller
 
         $query = ResignRequest::with('employee')->orderBy('created_at', 'desc');
 
-        // PM non-admin hanya boleh melihat pengajuan resign bawahan langsungnya.
-        if ($user->isPm() && !$user->isAdmin() && !$user->isHc()) {
+        // PM non-admin hanya boleh melihat pengajuan resign bawahan langsungnya,
+        // kecuali jika dia termasuk divisi checklist (HC/IT/DOC/Finance/GA) → boleh lihat semua.
+        if ($user->isPm() && !$user->isAdmin() && !$user->isHc() && !$user->canAccessChecklist()) {
             $subordinateIds = User::where('pm_id', $user->id)->pluck('id');
-            $query->whereIn('employees_id', $subordinateIds);
+            $query->where(function ($q) use ($subordinateIds, $user) {
+                $q->whereIn('employees_id', $subordinateIds)
+                    ->orWhere('employees_id', $user->id);
+            });
         }
 
         // Special-case HC observer: saat membuka list, notifikasi dashboard dianggap sudah dibaca.
@@ -311,17 +318,127 @@ class ResignController extends Controller
         return true;
     }
 
+    /**
+     * Ambil employees_id dari net_hrd.employees yang sesuai dengan user (cocokkan via id_karyawan, nik, atau username).
+     * API leave baca dari net_hrd.employees, jadi ID yang dikirim harus dari tabel ini.
+     */
+    private function getNetHrdEmployeesId(User $user): ?int
+    {
+        try {
+            if (!Schema::connection('net_hrd')->hasTable('employees')) {
+                return null;
+            }
+            if (empty($user->id_karyawan) && empty($user->username)) {
+                return null;
+            }
+            $cols = Schema::connection('net_hrd')->getColumnListing('employees');
+            $idCol = in_array('id', $cols, true) ? 'id' : (in_array('employees_id', $cols, true) ? 'employees_id' : null);
+            if (!$idCol) {
+                return null;
+            }
+
+            $q = DB::connection('net_hrd')->table('employees');
+            $q->where(function ($sub) use ($cols, $user) {
+                if (in_array('id_karyawan', $cols, true) && $user->id_karyawan !== null && $user->id_karyawan !== '') {
+                    $sub->orWhere('id_karyawan', $user->id_karyawan);
+                }
+                if (in_array('nik', $cols, true) && $user->id_karyawan !== null && $user->id_karyawan !== '') {
+                    $sub->orWhere('nik', $user->id_karyawan);
+                }
+                if (in_array('username', $cols, true) && $user->username !== null && $user->username !== '') {
+                    $sub->orWhere('username', $user->username);
+                }
+            });
+
+            $row = $q->select($idCol)->first();
+            return $row && isset($row->{$idCol}) ? (int) $row->{$idCol} : null;
+        } catch (\Throwable $e) {
+            Log::channel('stack')->debug('Leave balance: getNetHrdEmployeesId exception', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Ambil sisa cuti karyawan dari API MUC Leave (balance-remaining).
+     * API mengambil data dari database net_hrd tabel employees; employees_id harus ID dari net_hrd.employees, bukan dari users.
+     */
+    private function fetchLeaveBalance(User $user): ?array
+    {
+        $url = config('services.muc_leave.url');
+        $token = config('services.muc_leave.token');
+        if (empty($url) || empty($token)) {
+            Log::channel('stack')->debug('Leave balance: URL or token empty', ['url' => $url ? 'set' : 'empty', 'token_len' => $token ? strlen($token) : 0]);
+            return null;
+        }
+
+        // API baca dari net_hrd.employees → kirim employees_id dari tabel itu, bukan dari users
+        $employeesId = $this->getNetHrdEmployeesId($user);
+        if ($employeesId === null) {
+            Log::channel('stack')->debug('Leave balance: karyawan tidak ditemukan di net_hrd.employees', ['user_id' => $user->id, 'id_karyawan' => $user->id_karyawan]);
+            return null;
+        }
+
+        $headers = [
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . $token,
+        ];
+        $payload = ['employees_id' => $employeesId];
+
+        try {
+            // Spek API: body JSON; coba POST dulu, lalu GET. Jika 404 coba URL alternatif (leave vs leavel).
+            $response = Http::withHeaders($headers)->post($url, $payload);
+
+            if (!$response->successful()) {
+                $response = Http::withHeaders($headers)->get($url, $payload);
+            }
+
+            if (!$response->successful() && $response->status() === 404) {
+                $altUrl = preg_replace('#/leavel/#', '/leave/', $url);
+                if ($altUrl !== $url) {
+                    $response = Http::withHeaders($headers)->post($altUrl, $payload);
+                    if (!$response->successful()) {
+                        $response = Http::withHeaders($headers)->get($altUrl, $payload);
+                    }
+                }
+            }
+
+            if (!$response->successful()) {
+                Log::channel('stack')->warning('Leave balance API error', ['status' => $response->status(), 'body' => $response->body(), 'employees_id' => $employeesId]);
+                return null;
+            }
+
+            $json = $response->json();
+            if (($json['status'] ?? '') !== 'success' || !isset($json['data'])) {
+                Log::channel('stack')->warning('Leave balance API: unexpected response', ['json' => $json]);
+                return null;
+            }
+
+            $data = $json['data'];
+            return [
+                'status' => (bool) ($data['status'] ?? false),
+                'sisa_cuti' => isset($data['sisa_cuti']) ? (float) $data['sisa_cuti'] : null,
+                'total_max_leave' => isset($data['total_max_leave']) ? (float) $data['total_max_leave'] : null,
+                'max_leave' => isset($data['max_leave']) ? (int) $data['max_leave'] : null,
+                'threshold' => isset($data['threshold']) ? (int) $data['threshold'] : null,
+            ];
+        } catch (\Throwable $e) {
+            Log::channel('stack')->warning('Leave balance API exception', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
     private function resolveEmploymentType(User $user): ?string
     {
         try {
-            if (!Schema::connection('net_hrd')->hasTable('employee_status')) {
+            if (!Schema::connection('net_hrd')->hasTable('employees_status')) {
                 return null;
             }
             if (!Schema::connection('net_hrd')->hasTable('status')) {
                 return null;
             }
 
-            $employeeStatusCols = Schema::connection('net_hrd')->getColumnListing('employee_status');
+            $employeeStatusCols = Schema::connection('net_hrd')->getColumnListing('employees_status');
             $statusCols = Schema::connection('net_hrd')->getColumnListing('status');
         } catch (\Throwable $e) {
             return null;
@@ -339,6 +456,22 @@ class ResignController extends Controller
             return null;
         }
 
+        // employees_status.employees_id biasanya merujuk ke net_hrd.employees.id, bukan users.id, bukan users.id
+        $netHrdEmployeeId = $this->getNetHrdEmployeesId($user);
+        if ($netHrdEmployeeId !== null && in_array('employees_id', $employeeStatusCols, true)) {
+            $row = DB::connection('net_hrd')
+                ->table('employees_status as es')
+                ->join('status as s', "es.{$joinFromEmployeeStatus}", '=', "s.{$joinFromStatus}")
+                ->when(in_array('is_active', $employeeStatusCols, true), fn ($q) => $q->where('es.is_active', 1))
+                ->where('es.employees_id', $netHrdEmployeeId)
+                ->orderByDesc('es.' . (in_array('id', $employeeStatusCols, true) ? 'id' : 'employees_id'))
+                ->selectRaw("s.{$statusTextCol} as status_text")
+                ->first();
+            if ($row && isset($row->status_text)) {
+                return $this->mapStatusTextToType($row->status_text);
+            }
+        }
+
         $identityColumns = collect(['employees_id', 'employee_id', 'id_employee', 'id_karyawan', 'nik', 'username'])
             ->filter(fn ($col) => in_array($col, $employeeStatusCols, true))
             ->values();
@@ -347,12 +480,10 @@ class ResignController extends Controller
         }
 
         $identityCandidates = array_values(array_filter([
-            'employees_id' => $user->id,
-            'employee_id' => $user->id,
-            'id_employee' => $user->id,
-            'id_karyawan' => $user->id_karyawan,
-            'nik' => $user->id_karyawan,
-            'username' => $user->username,
+            $netHrdEmployeeId,
+            $user->id,
+            $user->id_karyawan,
+            $user->username,
         ], fn ($v) => $v !== null && $v !== ''));
 
         if (empty($identityCandidates)) {
@@ -360,7 +491,7 @@ class ResignController extends Controller
         }
 
         $row = DB::connection('net_hrd')
-            ->table('employee_status as es')
+            ->table('employees_status as es')
             ->join('status as s', "es.{$joinFromEmployeeStatus}", '=', "s.{$joinFromStatus}")
             ->when(in_array('is_active', $employeeStatusCols, true), fn ($q) => $q->where('es.is_active', 1))
             ->where(function ($q) use ($identityColumns, $identityCandidates) {
@@ -378,19 +509,21 @@ class ResignController extends Controller
             return null;
         }
 
-        $text = strtolower((string) $row->status_text);
-        // Magang: berbagai variasi penulisan
+        return $this->mapStatusTextToType($row->status_text);
+    }
+
+    private function mapStatusTextToType(string $statusText): ?string
+    {
+        $text = strtolower((string) $statusText);
         if (str_contains($text, 'magang') || str_contains($text, 'intern') || str_contains($text, 'pkl') || str_contains($text, 'prakerin') || str_contains($text, 'praktik kerja') || str_contains($text, 'apprentice')) {
             return 'magang';
         }
-        // Kontrak: PKWT, outsourcing, alih daya, dll
         if (str_contains($text, 'kontrak') || str_contains($text, 'contract') || str_contains($text, 'pkwt') || str_contains($text, 'perjanjian waktu tertentu') || str_contains($text, 'outsourcing') || str_contains($text, 'alih daya')) {
             return 'kontrak';
         }
         if (str_contains($text, 'permanen') || str_contains($text, 'tetap')) {
             return 'permanen';
         }
-
         return null;
     }
 }
